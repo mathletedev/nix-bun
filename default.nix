@@ -1,9 +1,9 @@
 { lib
 , stdenvNoCC
-, callPackage
 , fetchurl
 , autoPatchelfHook
 , unzip
+, installShellFiles
 , openssl
 , writeShellScript
 , curl
@@ -12,13 +12,13 @@
 }:
 
 stdenvNoCC.mkDerivation rec {
-  version = "1.0.15";
+  version = "1.1.0";
   pname = "bun";
 
   src = passthru.sources.${stdenvNoCC.hostPlatform.system} or (throw "Unsupported system: ${stdenvNoCC.hostPlatform.system}");
 
   strictDeps = true;
-  nativeBuildInputs = [ unzip ] ++ lib.optionals stdenvNoCC.isLinux [ autoPatchelfHook ];
+  nativeBuildInputs = [ unzip installShellFiles ] ++ lib.optionals stdenvNoCC.isLinux [ autoPatchelfHook ];
   buildInputs = [ openssl ];
 
   dontConfigure = true;
@@ -26,14 +26,44 @@ stdenvNoCC.mkDerivation rec {
 
   installPhase = ''
     runHook preInstall
+
     install -Dm 755 ./bun $out/bin/bun
+    ln -s $out/bin/bun $out/bin/bunx
+
     runHook postInstall
   '';
+
+  postPhases = [ "postPatchelf" ];
+  postPatchelf = lib.optionalString (stdenvNoCC.buildPlatform.canExecute stdenvNoCC.hostPlatform) ''
+    completions_dir=$(mktemp -d)
+
+    SHELL="bash" $out/bin/bun completions $completions_dir
+    SHELL="zsh" $out/bin/bun completions $completions_dir
+    SHELL="fish" $out/bin/bun completions $completions_dir
+
+    installShellCompletion --name bun \
+      --bash $completions_dir/bun.completion.bash \
+      --zsh $completions_dir/_bun \
+      --fish $completions_dir/bun.fish
+  '';
+
   passthru = {
     sources = {
+      "aarch64-darwin" = fetchurl {
+        url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/bun-darwin-aarch64.zip";
+        hash = "sha256-ggODKY9y8J0xY1SImiQq0qVepi6ywXB95kyg6zPoaLw=";
+      };
+      "aarch64-linux" = fetchurl {
+        url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/bun-linux-aarch64.zip";
+        hash = "sha256-QFA1MjtBAt3a/HAe2Mdv8LA2Iv5ayO279gOOuFqEZ/E=";
+      };
+      "x86_64-darwin" = fetchurl {
+        url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/bun-darwin-x64.zip";
+        hash = "sha256-Dwv5Osqel0wWuzprXOXiIq87259REPs5ZSczhXDG23k=";
+      };
       "x86_64-linux" = fetchurl {
         url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/bun-linux-x64.zip";
-        sha256 = "f144b6b1b8ab14e0055df1af1e6f55a8f3918d4cc937f2bed3f05c80ae0555c2";
+        hash = "sha256-WhfqYTVkdaSjoN7zRcRodfLPK2K579tluSEEXTVzOFM=";
       };
     };
     updateScript = writeShellScript "update-bun" ''
@@ -45,14 +75,14 @@ stdenvNoCC.mkDerivation rec {
           exit 0
       fi
       for platform in ${lib.escapeShellArgs meta.platforms}; do
-        update-source-version "bun" "0" "${lib.fakeSha256}" --source-key="sources.$platform"
+        update-source-version "bun" "0" "${lib.fakeHash}" --source-key="sources.$platform"
         update-source-version "bun" "$NEW_VERSION" --source-key="sources.$platform"
       done
     '';
   };
   meta = with lib; {
     homepage = "https://bun.sh";
-    changelog = "https://github.com/Jarred-Sumner/bun/releases/tag/bun-v${version}";
+    changelog = "https://bun.sh/blog/bun-v${version}";
     description = "Incredibly fast JavaScript runtime, bundler, transpiler and package manager – all in one";
     sourceProvenance = with sourceTypes; [ binaryNativeCode ];
     longDescription = ''
@@ -62,7 +92,11 @@ stdenvNoCC.mkDerivation rec {
       mit # bun core
       lgpl21Only # javascriptcore and webkit
     ];
-    maintainers = with maintainers; [ DAlperin jk ];
+    mainProgram = "bun";
+    maintainers = with maintainers; [ DAlperin jk thilobillerbeck cdmistman coffeeispower ];
     platforms = builtins.attrNames passthru.sources;
+    # Broken for Musl at 2024-01-13, tracking issue:
+    # https://github.com/NixOS/nixpkgs/issues/280716
+    broken = stdenvNoCC.hostPlatform.isMusl;
   };
 }
